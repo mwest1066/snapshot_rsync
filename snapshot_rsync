@@ -354,6 +354,12 @@ try:
 	lock = os.open(lock_filename,
 		       os.O_EXCL | os.O_CREAT | os.O_WRONLY, 0644)
 except:
+	# If we can't acquire the lock, we don't attempt to check
+	# whether the locking process is still running and steal the
+	# lock, because that will hide backup failures. If the old
+	# backup process died and didn't release the lock correctly,
+	# we probably want to manually delete the failed backup as
+	# well, so that we don't hardlink against a partial backup.
 	print "Error aquiring lock file " + lock_filename
 	log(src, dst, "Fail to aquire lock "+ lock_filename+ ":exiting" )
 	sys.exit(3)
