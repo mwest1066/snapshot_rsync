@@ -8,72 +8,51 @@
 import sys, getopt, datetime, re, os, string, time
 
 ######################################################################
-#
 # Global defines.
-#
 
-#
 # Version number of this script
-#
 version_string = '0.1.0'
 
-#
 # printf-like format to generate ISO 8601 dates
-#
 isodate_format = '%04d-%02d-%02dT%02d:%02d:%02d%+03d:%02d'
 
-#
 # Regular expression to match an ISO 8601 date. 8 fields are:
 #   year, month, day, hour, minute, second, timezone_hour, timezone_minute
-#
 isodate_re = '^(\d\d\d\d)-(\d\d)-(\d\d)T(\d\d):(\d\d):(\d\d)([+-]\d\d):(\d\d)$'
 
 ######################################################################
-#
 # Global variables that can be over-ridden by command-line arguments.
-#
 
-#
 # Source directory to be backed up.
-#
 src = ""
 
-#
 # Destination directory to make the backup in.
-#
 dst = ""
 
-#
 # List of 2-tuples of the form (past, delta) which mean that the
 # minimum time spacing between backups is <delta> between the
 # current time and (current_time - <past>). Both <past> and <delta>
 # are timedelta objects. The requirements of the list <delete_req>
 # are the union of the individual requirements.
-#
 delete_req = []
 
-#
 # Whether to print diagnostic information while running (True or False).
-#
 print_diags = False
 
-#
+# Whether to delete old backups before making the new one (True or False).
+delete_first = False
+
 # Name of the rsync binary to use (should be an absolute pathname).
-#
 rsync_bin = '/usr/bin/rsync'
 
-#
 # Whether to run in safe-mode (True or False), where no external
 # commands will be executed, and no filesystem modifications
 # performed. Instead a message will be printed for each operation,
 # specifying what it would have been.
-#
 safe_mode = False
 
-#
 # Whether to use SSH to access the source directory. If so, the name
 # of the remote machine.
-#
 ssh_machine = False
 
 ######################################################################
@@ -88,15 +67,17 @@ Usage: snapshot_rsync [options] <src> <dst>
   <dst>      the directory in which to make the backup.
 
 Options:
+  -d                Delete old backups before making the new backup. This
+  --delete-first    ensures minimum space usage but can lead to inefficient
+                    transfers and risks having fewer backups temporarily.
+		    The default is to delete after the new backup is done.
+
+  -k <n>,<m>        Delete old backups, keeping at least one backup every m
+  --keep <n>,<m>    days between now and n days ago. Multiple -k arguments
+                    stack so that all constraints are satisfied. All backups
+		    older than the largest <n> are deleted.
+
   -h, --help        Print this usage help.
-
-  -V, --version     Print the version number.
-
-  -d <n>,<m>        Delete old backups, keeping at least one backup every m
-  --delete <n>,<m>  days between now and n days ago. Multiple -d arguments
-                    stack so that all constraints are satisfied.
-
-  --diag            Print extra diagnostic information while running.
 
   --rsync <name>    Set the name of the rsync binary to use.
 
@@ -106,7 +87,11 @@ Options:
   -s <name>         Use rsync over SSH to the remote machine <name> to
   --ssh <name>      access <src>.
 
-Example: snapshot_rsync -d 7,1 -d 360,30 /home/user1 /backups
+  -v, --verbose     Print extra diagnostic information while running.
+
+  -V, --version     Print the version number.
+
+Example: snapshot_rsync -k 7,1 -k 360,30 /home/user1 /backups
 
 This will create a backup of /home/user1 of the form
 /backups/user1.<isodate>, with hard links made where possible to the
@@ -121,14 +106,13 @@ def print_version():
 	print "snapshot_rsync " + version_string
 
 ######################################################################
-#
 # Get a list of existing backups in <backup_dir> which have a name of
 # the form <prefix>.<isodate>.
 #
 # Returns a list of 2-tuples of the form (backup_time, backup_name),
 # sorted by age with most recent first. The backup_time has no
 # timezone and is UTC.
-#
+
 def get_old_backups(backup_dir, prefix):
 	try:
 		dir_list = os.listdir(backup_dir)
@@ -159,21 +143,21 @@ def get_old_backups(backup_dir, prefix):
 	return old_backups
 
 ######################################################################
-#
 # Process the commandline and change any global variables necessary.
 #
 # Does not return anything.
-#
+
 def process_cmdline():
 	global src
 	global dst
 	global delete_req
 	global print_diags
+	global delete_first
 	global rsync_bin
 	global safe_mode
 	global ssh_machine
 	try:
-		options, args = getopt.gnu_getopt(sys.argv[1:], 'd:hVs:', ['help', 'version', 'delete', 'diag', 'safe-mode', 'ssh'])
+		options, args = getopt.gnu_getopt(sys.argv[1:], 'k:hdvVs:', ['help', 'version', 'keep=', 'verbose', 'delete-first', 'safe-mode', 'ssh='])
 	except getopt.GetoptError, inst:
 		print "Error processing command line: " + str(inst)
 		print "Run 'snapshot_rsync -h' for help"
@@ -185,7 +169,7 @@ def process_cmdline():
 		if opt in ('-V', '--version'):
 			print_version()
 			sys.exit()
-		if opt in ('-d', '--delete'):
+		if opt in ('-k', '--keep'):
 			match = re.compile('^(\d+),(\d+)$').search(opt_val)
 			if match == None:
 				print "Error processing argument -d " + opt_val
@@ -195,8 +179,10 @@ def process_cmdline():
 			days_delta = int(match.group(2))
 			delete_req.append((datetime.timedelta(days = days_past),
 				datetime.timedelta(days = days_delta)))
-		if opt == '--diag':
+		if opt in ('-v', '--verbose'):
 			print_diags = True
+		if opt in ('-d', '--delete-first'):
+			delete_first = True
 		if opt == '--rsync':
 			rsync_bin = opt_val
 		if opt == '--safe-mode':
@@ -207,8 +193,10 @@ def process_cmdline():
 		print "Must provide exactly two non-option commandline arguments."
 		print "Run 'snapshot_rsync -h' for help"
 		sys.exit(2)
-	src = os.path.normpath(os.path.abspath(args[0]))
-	dst = os.path.normpath(os.path.abspath(args[1]))
+	src = args[0]
+	dst = args[1]
+	#src = os.path.normpath(os.path.abspath(args[0]))
+	#dst = os.path.normpath(os.path.abspath(args[1]))
 	if print_diags:
 		print "Processed command line:"
 		print "  Using source: " + src
@@ -221,11 +209,10 @@ def process_cmdline():
 			print "  No deletions to be done"
 
 ######################################################################
-#
 # Parses a string in ISO 8601 format and returns a datetime object
 # for the UTC equivalent of the time in the string. That is, the
 # returned datetime will not have a timezone set.
-#
+
 def string_to_time(time_string):
 	date_re = re.compile(isodate_re)
 	match = date_re.search(time_string)
@@ -245,13 +232,12 @@ def string_to_time(time_string):
 	return ret_time
 
 ######################################################################
-#
 # Computes a set of backups to delete given the list of current
 # backups in <old_backups> and the requirements <delete_req> to
 # be satisfied by the remaining set after deletion.
 #
 # <old_backups> must be in the form returned by get_old_backups() and
-# must include any backups which were just performed.
+# must include any backups that were just performed.
 #
 # <delete_req> must be in the form of the global variable <delete_req>
 #
@@ -259,17 +245,30 @@ def string_to_time(time_string):
 # that should be deleted.
 #
 # The algorithm used is just a simple greedy one, starting at the
-# most-recent-but-one backup.
-#
+# most-recent-but-one backup, after stripping off backups past the
+# oldest requirement date.
+
 def get_backups_to_delete(old_backups, delete_req):
-	if len(old_backups) < 2:
-		return []
+	# strip off backups that are too old
+	usable_old_backups = []
 	backups_to_delete = []
+	largest_past = max([datetime.timedelta(days = 0)] \
+			   + [past for past, delta in delete_req])
 	now_time = datetime.datetime.utcnow()
-	prev_i = len(old_backups) - 1
-	for i in range(len(old_backups) - 2, 0, -1):
-		cur_time, cur_name = old_backups[i]
-		prev_time, prev_name = old_backups[prev_i]
+	for backup in old_backups:
+		cur_time, cur_name = backup
+		if now_time - cur_time < largest_past:
+			usable_old_backups.append(backup)
+		else:
+			backups_to_delete.append(cur_name)
+
+	# greedy algorithm to find backup set that satisfies requirements
+	if len(usable_old_backups) < 2:
+		return backups_to_delete
+	prev_i = len(usable_old_backups) - 1
+	for i in range(len(usable_old_backups) - 2, 0, -1):
+		cur_time, cur_name = usable_old_backups[i]
+		prev_time, prev_name = usable_old_backups[prev_i]
 		found_restriction = False
 		for restriction in delete_req:
 			past, delta = restriction
@@ -285,7 +284,7 @@ def get_backups_to_delete(old_backups, delete_req):
 			continue
 		if i == 0:
 			continue
-		post_time, post_name = old_backups[i-1]
+		post_time, post_name = usable_old_backups[i-1]
 		if prev_time - post_time < min_restriction:
 			backups_to_delete.append(cur_name)
 			continue
@@ -293,9 +292,8 @@ def get_backups_to_delete(old_backups, delete_req):
 	return backups_to_delete
 
 ######################################################################
-#
 # Recursively deletes the given directory and all of its subdirs.
-#
+
 def rm_tree(dir_name):
 	if os.path.isdir(dir_name) and not os.path.islink(dir_name):
 		for dir_entry in os.listdir(dir_name):
@@ -305,29 +303,78 @@ def rm_tree(dir_name):
 		os.unlink(dir_name)
 
 ######################################################################
+# Delete old backups
+
+def delete_old_backups(src, dst):
+	old_backups = get_old_backups(dst, os.path.basename(src))
+	backups_to_delete = get_backups_to_delete(old_backups, delete_req)
+	
+	try:
+		for dir in backups_to_delete:
+			rm_name = os.path.join(dst, dir)
+			if print_diags:
+				print "Deleting old backup " + rm_name
+			if not safe_mode:
+				rm_tree(rm_name)
+				log(src, dst, "Deleting old backup " + rm_name)
+			else:
+				print "safe_mode: rm_tree: " + rm_name
+	except Exception, inst:
+		print "Error deleting " + dir + ": " + str(inst)
+		sys.exit(5)
+
+######################################################################
+# Logging
+
+def log(src, dst, msg):
+	logfilename = os.path.join(dst, "log.%s" % os.path.basename(src))
+	try:
+		logfile = open(logfilename, "a")
+		logfile.write("%s snapshot_rsync[%d] %s\n"
+			      % (datetime.datetime.now().isoformat(),
+				 os.getpid(), msg))
+		logfile.close()
+	except:
+		print "Error writing to logfile " + logfilename
+		sys.exit(4)
+	
 ######################################################################
 ######################################################################
-#
+######################################################################
 # Main program
-#
 
 process_cmdline()
 
-old_backups = get_old_backups(dst, os.path.basename(src))
+log(src, dst, "Started backup from %s to %s" % (src, dst))
 
-#
+# Lock file
+lock_filename = os.path.join(dst, "lock")
+try:
+	# try to open the lock file exclusively (fails if it already exists)
+	lock = os.open(lock_filename,
+		       os.O_EXCL | os.O_CREAT | os.O_WRONLY, 0644)
+except:
+	print "Error aquiring lock file " + lock_filename
+	log(src, dst, "Fail to aquire lock "+ lock_filename+ ":exiting" )
+	sys.exit(3)
+# store our own PID in the lock file
+os.write(lock, "PID %d at %s"
+	 % (os.getpid(), datetime.datetime.now().isoformat()))
+os.close(lock)
+
+if delete_first:
+	delete_old_backups(src, dst)
+
 # If we have any pre-existing backups, use the most recent as the
 # link-dest argument to rsync.
-#
+old_backups = get_old_backups(dst, os.path.basename(src))
 if len(old_backups) > 0:
 	previous_time, previous_backup = old_backups[-1]
 	link_dest_arg = '--link-dest=' + os.path.join(dst, previous_backup)
 else:
 	link_dest_arg = ''
 
-#
 # Compute the name of new backup (of the form <src>.<isodate>)
-#
 curtime = time.localtime()
 
 backup_name = os.path.basename(src) + '.' + isodate_format % ( \
@@ -335,9 +382,7 @@ backup_name = os.path.basename(src) + '.' + isodate_format % ( \
 	curtime.tm_hour, curtime.tm_min, curtime.tm_sec, \
 	(-time.timezone) / 3600, ((-time.timezone) / 60) % 60)
 
-#
 # Compute the commandline for rsync
-#
 rsync_args = ['-a']
 if len(link_dest_arg) > 0:
 	rsync_args.append(link_dest_arg)
@@ -355,9 +400,7 @@ rsync_cmd = [rsync_bin] + rsync_args
 if print_diags:
 	print "rsync command to run: " + string.join(rsync_cmd)
 
-#
 # Call rsync
-#
 if not safe_mode:
 	ret = os.spawnv(os.P_WAIT, rsync_bin, rsync_cmd)
 	if ret < 0:
@@ -369,23 +412,17 @@ if not safe_mode:
 else:
 	print "safe_mode: run command: " + string.join(rsync_cmd)
 
-#
 # Delete any unnecessary old backups
-#
-old_backups = get_old_backups(dst, os.path.basename(src))
-backups_to_delete = get_backups_to_delete(old_backups, delete_req)
+if not delete_first:
+	delete_old_backups(src, dst)
 
+# Remove lock file
 try:
-	for dir in backups_to_delete:
-		rm_name = os.path.join(dst, dir)
-		if print_diags:
-			print "Deleting old backup " + rm_name
-		if not safe_mode:
-			rm_tree(rm_name)
-		else:
-			print "safe_mode: rm_tree: " + rm_name
-except Exception, inst:
-	print "Error deleting " + dir + ": " + str(inst)
+	os.unlink(lock_filename)
+except:
+	pass
+
+log(src, dst, "Backup completed successfully")
 
 ######################################################################
 ######################################################################
