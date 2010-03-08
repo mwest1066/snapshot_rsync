@@ -367,69 +367,106 @@ except:
 	log(src, dst, "Fail to aquire lock "+ lock_filename+ ":exiting" )
 	sys.exit(3)
 # store our own PID in the lock file
-os.write(lock, "PID %d at %s"
-	 % (os.getpid(), datetime.datetime.now().isoformat()))
-os.close(lock)
+try:
+	os.write(lock, "PID %d at %s"
+		 % (os.getpid(), datetime.datetime.now().isoformat()))
+	os.close(lock)
+except Exception as inst:
+	log(src, dst, "Error writing PID to lock file: %s: %s" % (type(inst), str(inst)))
+	sys.exit(4)
+log(src, dst, "Finished lock aquire")
 
-if delete_first:
-	delete_old_backups(src, dst)
+# Delete old backups first if necessary
+try:
+	if delete_first:
+		delete_old_backups(src, dst)
+except Exception as inst:
+	log(src, dst, "Error deleting old backups first: %s: %s" % (type(inst), str(inst)))
+	sys.exit(4)
+log(src, dst, "Finished deleting old backups first")
 
 # If we have any pre-existing backups, use the most recent as the
 # link-dest argument to rsync.
-old_backups = get_old_backups(dst, os.path.basename(src))
-if len(old_backups) > 0:
-	previous_time, previous_backup = old_backups[-1]
-	link_dest_arg = '--link-dest=' + os.path.join(dst, previous_backup)
-else:
-	link_dest_arg = ''
+try:
+	old_backups = get_old_backups(dst, os.path.basename(src))
+	if len(old_backups) > 0:
+		previous_time, previous_backup = old_backups[-1]
+		link_dest_arg = '--link-dest=' + os.path.join(dst, previous_backup)
+	else:
+		link_dest_arg = ''
+except Exception as inst:
+	log(src, dst, "Error determining link_dest: %s: %s" % (type(inst), str(inst)))
+	sys.exit(4)
+log(src, dst, "Finished determining link_dest")
 
 # Compute the name of new backup (of the form <src>.<isodate>)
-curtime = time.localtime()
-
-backup_name = os.path.basename(src) + '.' + isodate_format % ( \
-	curtime.tm_year, curtime.tm_mon, curtime.tm_mday, \
-	curtime.tm_hour, curtime.tm_min, curtime.tm_sec, \
-	(-time.timezone) / 3600, ((-time.timezone) / 60) % 60)
+try:
+	curtime = time.localtime()
+	backup_name = os.path.basename(src) + '.' + isodate_format % ( \
+		curtime.tm_year, curtime.tm_mon, curtime.tm_mday, \
+		curtime.tm_hour, curtime.tm_min, curtime.tm_sec, \
+		(-time.timezone) / 3600, ((-time.timezone) / 60) % 60)
+except Exception as inst:
+	log(src, dst, "Error determining backup_name: %s: %s" % (type(inst), str(inst)))
+	sys.exit(4)
+log(src, dst, "Finished determining backup_name")
 
 # Compute the commandline for rsync
-rsync_args = ['-a']
-if len(link_dest_arg) > 0:
-	rsync_args.append(link_dest_arg)
-if ssh_machine:
-	rsync_src = ssh_machine + ':' + src
-else:
-	rsync_src = src
-rsync_args.extend([rsync_src, os.path.join(dst, backup_name)])
+try:
+	rsync_args = ['-a']
+	if len(link_dest_arg) > 0:
+		rsync_args.append(link_dest_arg)
+	if ssh_machine:
+		rsync_src = ssh_machine + ':' + src
+	else:
+		rsync_src = src
+	rsync_args.extend([rsync_src, os.path.join(dst, backup_name)])
 
-if ssh_machine:
-	rsync_args = ['--rsh=ssh'] + rsync_args
+	if ssh_machine:
+		rsync_args = ['--rsh=ssh'] + rsync_args
 
-rsync_cmd = [rsync_bin] + rsync_args
+	rsync_cmd = [rsync_bin] + rsync_args
 
-if print_diags:
-	print "rsync command to run: " + string.join(rsync_cmd)
+	if print_diags:
+		print "rsync command to run: " + string.join(rsync_cmd)
+except Exception as inst:
+	log(src, dst, "Error computing rsync_cmd: %s: %s" % (type(inst), str(inst)))
+	sys.exit(4)
+log(src, dst, "Finished computing rsync_cmd")
 
 # Call rsync
-if not safe_mode:
-	ret = os.spawnv(os.P_WAIT, rsync_bin, rsync_cmd)
-	if ret < 0:
-		print "Error: rsync terminated by signal " + str(-ret)
-		sys.exit(1)
-	if ret > 0:
-		print "Error: rsync terminated with error " + str(ret)
-		sys.exit(1)
-else:
-	print "safe_mode: run command: " + string.join(rsync_cmd)
+try:
+	if not safe_mode:
+		ret = os.spawnv(os.P_WAIT, rsync_bin, rsync_cmd)
+		if ret < 0:
+			print "Error: rsync terminated by signal " + str(-ret)
+			sys.exit(1)
+		if ret > 0:
+			print "Error: rsync terminated with error " + str(ret)
+			sys.exit(1)
+	else:
+		print "safe_mode: run command: " + string.join(rsync_cmd)
+except Exception as inst:
+	log(src, dst, "Error running rsync: %s: %s" % (type(inst), str(inst)))
+	sys.exit(4)
+log(src, dst, "Finished running rsync")
 
 # Delete any unnecessary old backups
-if not delete_first:
-	delete_old_backups(src, dst)
+try:
+	if not delete_first:
+		delete_old_backups(src, dst)
+except Exception as inst:
+	log(src, dst, "Error deleting old backups last: %s: %s" % (type(inst), str(inst)))
+	sys.exit(4)
+log(src, dst, "Finished deleting old backups last")
 
 # Remove lock file
 try:
 	os.unlink(lock_filename)
-except:
-	pass
+except Exception as inst:
+	log(src, dst, "Error releasing lock: %s: %s" % (type(inst), str(inst)))
+	sys.exit(4)
+log(src, dst, "Finished releasing lock")
 
 log(src, dst, "Backup completed successfully")
 
