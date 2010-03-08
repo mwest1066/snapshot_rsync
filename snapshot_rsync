@@ -2,8 +2,11 @@
 #
 # snapshot_rsync
 #
-# Matt West 2004-11-24
+# Copyright 2004-2010 Matthew West
 #
+# This work is licensed under a Creative Commons Attribution 3.0
+# United States License:
+# http://creativecommons.org/licenses/by/3.0/us/
 
 import sys, getopt, datetime, re, os, string, time
 
