@@ -364,7 +364,7 @@ except:
 	# we probably want to manually delete the failed backup as
 	# well, so that we don't hardlink against a partial backup.
 	print "Error aquiring lock file " + lock_filename
-	log(src, dst, "Fail to aquire lock "+ lock_filename+ ":exiting" )
+	log(src, dst, "Failed to aquire lock " + lock_filename + ": exiting" )
 	sys.exit(3)
 # store our own PID in the lock file
 try:
