@@ -351,7 +351,7 @@ process_cmdline()
 log(src, dst, "Started backup from %s to %s" % (src, dst))
 
 # Lock file
-lock_filename = os.path.join(dst, "lock")
+lock_filename = os.path.join(dst, "lock.%s" % os.path.basename(src))
 try:
 	# try to open the lock file exclusively (fails if it already exists)
 	lock = os.open(lock_filename,
