@@ -376,6 +376,28 @@ except Exception as inst:
 	sys.exit(4)
 log(src, dst, "Finished lock aquire")
 
+# Find the symlink that points to the most recent successful backup.
+current_link_filename = os.path.join(dst, "current.%s" % os.path.basename(src))
+link_dest = None
+link_dest_arg = ''
+if print_diags:
+        print "current link filename: %s" % current_link_filename
+try:
+        if os.path.exists(current_link_filename):
+                if not os.path.islink(current_link_filename):
+                        raise Exception("Current link is not a symlink: "
+                                        + current_link_filename)
+                link_dest = os.readlink(current_link_filename)
+                if print_diags:
+                        print "current link points to: %s" % link_dest
+                list_dest_arg = '--link-dest=' + link_dest
+except Exception as inst:
+	log(src, dst, "Error determining link_dest: %s: %s" % (type(inst), str(inst)))
+	sys.exit(4)
+if print_diags:
+        print "link_dest argument: " + link_dest_arg
+log(src, dst, "Finished determining link_dest")
+
 # Delete old backups first if necessary
 try:
 	if delete_first:
@@ -384,20 +406,6 @@ except Exception as inst:
 	log(src, dst, "Error deleting old backups first: %s: %s" % (type(inst), str(inst)))
 	sys.exit(4)
 log(src, dst, "Finished deleting old backups first")
-
-# If we have any pre-existing backups, use the most recent as the
-# link-dest argument to rsync.
-try:
-	old_backups = get_old_backups(dst, os.path.basename(src))
-	if len(old_backups) > 0:
-		previous_time, previous_backup = old_backups[-1]
-		link_dest_arg = '--link-dest=' + os.path.join(dst, previous_backup)
-	else:
-		link_dest_arg = ''
-except Exception as inst:
-	log(src, dst, "Error determining link_dest: %s: %s" % (type(inst), str(inst)))
-	sys.exit(4)
-log(src, dst, "Finished determining link_dest")
 
 # Compute the name of new backup (of the form <src>.<isodate>)
 try:
@@ -450,6 +458,28 @@ except Exception as inst:
 	log(src, dst, "Error running rsync: %s: %s" % (type(inst), str(inst)))
 	sys.exit(4)
 log(src, dst, "Finished running rsync")
+
+# Make the symlink to the just completed backup.
+try:
+        if not safe_mode:
+                new_link_filename = current_link_filename + ".new"
+                if print_diags:
+                        print "new_link_filename: " + new_link_filename
+                if os.path.exists(new_link_filename):
+                        print "new_link_filename already exists, unlinking it"
+                        os.unlink(new_link_filename)
+                if print_diags:
+                        print "symlinking %s -> %s" % (new_link_filename, backup_name)
+                os.symlink(backup_name, new_link_filename)
+                if print_diags:
+                        print "renaming %s -> %s" % (new_link_filename, current_link_filename)
+                os.rename(new_link_filename, current_link_filename)
+        else:
+                print "safe_mode: symlink %s -> %s" % (current_link_filename, backup_name)
+except Exception as inst:
+	log(src, dst, "Error making current symlink: %s: %s" % (type(inst), str(inst)))
+	sys.exit(4)
+log(src, dst, "Finished making current symlink")
 
 # Delete any unnecessary old backups
 try:
