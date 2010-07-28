@@ -8,7 +8,7 @@
 # United States License:
 # http://creativecommons.org/licenses/by/3.0/us/
 
-import sys, getopt, datetime, re, os, string, time
+import sys, getopt, datetime, re, os, string, time, subprocess
 
 ######################################################################
 # Global defines.
@@ -21,7 +21,7 @@ isodate_format = '%04d-%02d-%02dT%02d:%02d:%02d%+03d:%02d'
 
 # Regular expression to match an ISO 8601 date. 8 fields are:
 #   year, month, day, hour, minute, second, timezone_hour, timezone_minute
-isodate_re = '^(\d\d\d\d)-(\d\d)-(\d\d)T(\d\d):(\d\d):(\d\d)([+-]\d\d):(\d\d)$'
+isodate_re = '(\d\d\d\d)-(\d\d)-(\d\d)T(\d\d):(\d\d):(\d\d)([+-]\d\d):(\d\d)$'
 
 ######################################################################
 # Global variables that can be over-ridden by command-line arguments.
@@ -41,9 +41,6 @@ delete_req = []
 
 # Whether to print diagnostic information while running (True or False).
 print_diags = False
-
-# Whether to delete old backups before making the new one (True or False).
-delete_first = False
 
 # Name of the rsync binary to use (should be an absolute pathname).
 rsync_bin = '/usr/bin/rsync'
@@ -70,15 +67,12 @@ Usage: snapshot_rsync [options] <src> <dst>
   <dst>      the directory in which to make the backup.
 
 Options:
-  -d                Delete old backups before making the new backup. This
-  --delete-first    ensures minimum space usage but can lead to inefficient
-                    transfers and risks having fewer backups temporarily.
-		    The default is to delete after the new backup is done.
-
   -k <n>,<m>        Delete old backups, keeping at least one backup every m
   --keep <n>,<m>    days between now and n days ago. Multiple -k arguments
                     stack so that all constraints are satisfied. All backups
-		    older than the largest <n> are deleted.
+                    older than the largest <n> are deleted. Backups are only
+                    deleted if at least one -k argument is provided. If n is
+                    0 then all old backups are deleted.
 
   -h, --help        Print this usage help.
 
@@ -155,12 +149,11 @@ def process_cmdline():
 	global dst
 	global delete_req
 	global print_diags
-	global delete_first
 	global rsync_bin
 	global safe_mode
 	global ssh_machine
 	try:
-		options, args = getopt.gnu_getopt(sys.argv[1:], 'k:hdvVs:', ['help', 'version', 'keep=', 'verbose', 'delete-first', 'safe-mode', 'ssh='])
+		options, args = getopt.gnu_getopt(sys.argv[1:], 'k:hvVs:', ['help', 'version', 'keep=', 'verbose', 'safe-mode', 'ssh='])
 	except getopt.GetoptError, inst:
 		print "Error processing command line: " + str(inst)
 		print "Run 'snapshot_rsync -h' for help"
@@ -184,8 +177,6 @@ def process_cmdline():
 				datetime.timedelta(days = days_delta)))
 		if opt in ('-v', '--verbose'):
 			print_diags = True
-		if opt in ('-d', '--delete-first'):
-			delete_first = True
 		if opt == '--rsync':
 			rsync_bin = opt_val
 		if opt == '--safe-mode':
@@ -239,10 +230,16 @@ def string_to_time(time_string):
 # backups in <old_backups> and the requirements <delete_req> to
 # be satisfied by the remaining set after deletion.
 #
+# The current backup will never be deleted, and all backups newer than
+# the current one will be deleted (it is assumed that they are failed
+# backups).
+#
 # <old_backups> must be in the form returned by get_old_backups() and
 # must include any backups that were just performed.
 #
 # <delete_req> must be in the form of the global variable <delete_req>
+#
+# If <delete_req> is an empty list then no deletions are performed.
 #
 # Returns a list of strings which are the basenames of the backups
 # that should be deleted.
@@ -251,23 +248,40 @@ def string_to_time(time_string):
 # most-recent-but-one backup, after stripping off backups past the
 # oldest requirement date.
 
-def get_backups_to_delete(old_backups, delete_req):
-	# strip off backups that are too old
-	usable_old_backups = []
+def get_backups_to_delete(old_backups, current_name, delete_req):
+        # only do this if we have some keep requirements
+        if len(delete_req) == 0:
+                return []
+
+	usable_old_backups = old_backups
 	backups_to_delete = []
+
+        # strip off all backups newer than current
+        if current_name:
+                new_usable_old_backups = []
+                current_time = string_to_time(current_name)
+                for backup in usable_old_backups:
+                        cur_time, cur_name = backup
+                        if cur_time <= current_time:
+                                new_usable_old_backups.append(backup)
+                        else:
+                                backups_to_delete.append(cur_name)
+                usable_old_backups = new_usable_old_backups
+
+	# strip off backups that are too old
+        new_usable_old_backups = []
 	largest_past = max([datetime.timedelta(days = 0)] \
 			   + [past for past, delta in delete_req])
 	now_time = datetime.datetime.utcnow()
-	for backup in old_backups:
+	for backup in usable_old_backups:
 		cur_time, cur_name = backup
 		if now_time - cur_time < largest_past:
-			usable_old_backups.append(backup)
+			new_usable_old_backups.append(backup)
 		else:
 			backups_to_delete.append(cur_name)
+        usable_old_backups = new_usable_old_backups
 
 	# greedy algorithm to find backup set that satisfies requirements
-	if len(usable_old_backups) < 2:
-		return backups_to_delete
 	prev_i = len(usable_old_backups) - 1
 	for i in range(len(usable_old_backups) - 2, 0, -1):
 		cur_time, cur_name = usable_old_backups[i]
@@ -292,6 +306,11 @@ def get_backups_to_delete(old_backups, delete_req):
 			backups_to_delete.append(cur_name)
 			continue
 		prev_i = i
+        
+        # don't ever delete current
+        backups_to_delete = [n for n in backups_to_delete
+                             if os.path.basename(n) != current_name]
+
 	return backups_to_delete
 
 ######################################################################
@@ -308,9 +327,9 @@ def rm_tree(dir_name):
 ######################################################################
 # Delete old backups
 
-def delete_old_backups(src, dst):
+def delete_old_backups(src, dst, current_name):
 	old_backups = get_old_backups(dst, os.path.basename(src))
-	backups_to_delete = get_backups_to_delete(old_backups, delete_req)
+	backups_to_delete = get_backups_to_delete(old_backups, current_name, delete_req)
 	
 	try:
 		for dir in backups_to_delete:
@@ -332,6 +351,8 @@ def delete_old_backups(src, dst):
 def log(src, dst, msg):
 	logfilename = os.path.join(dst, "log.%s" % os.path.basename(src))
 	try:
+                if print_diags:
+                        print msg
 		logfile = open(logfilename, "a")
 		logfile.write("%s snapshot_rsync[%d] %s\n"
 			      % (datetime.datetime.now().isoformat(),
@@ -357,18 +378,55 @@ try:
 	lock = os.open(lock_filename,
 		       os.O_EXCL | os.O_CREAT | os.O_WRONLY, 0644)
 except:
-	# If we can't acquire the lock, we don't attempt to check
-	# whether the locking process is still running and steal the
-	# lock, because that will hide backup failures. If the old
-	# backup process died and didn't release the lock correctly,
-	# we probably want to manually delete the failed backup as
-	# well, so that we don't hardlink against a partial backup.
-	print "Error aquiring lock file " + lock_filename
-	log(src, dst, "Failed to aquire lock " + lock_filename + ": exiting" )
-	sys.exit(3)
+        # failed to open the lock exclusively, try to steal it
+        log(src, dst, "Lock file exists, trying to steal it")
+        try:
+                lock = open(lock_filename)
+                lock_info = lock.readline()
+                lock.close()
+        except Exception as inst:
+                log(src, dst, "Error aquiring lock: %s: %s" % (type(inst), str(inst)))
+                sys.exit(4)
+        try:
+                match = re.search('^PID (\d+) at (.+)$', lock_info)
+                if not match:
+                        print "Error parsing existing lock file info: " + lock_filename
+                        log(src, dst, "Error parsing old lock " + lock_filename + ": exiting" )
+                        sys.exit(3)
+                old_pid = int(match.group(1))
+                old_time = match.group(2)
+                # could use this and get the output to check it is us
+                #ps_cmd = ["ps", "-o", "comm=", "-p", str(old_pid)]
+                # but for now we just check if PID exists at all
+                ps_cmd = ["ps", "-p", str(old_pid)]
+                log(src, dst, "Old lock was for PID %d at time %s" % (old_pid, old_time))
+                if print_diags:
+                        print "Running command: " + " ".join(ps_cmd)
+                ps_process = subprocess.Popen(ps_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                (stdoutdata, stdindata) = ps_process.communicate()
+                ps_result = ps_process.returncode
+                if print_diags:
+                        print "ps returned %d" % ps_result
+                if ps_result == 0:
+                        # ps was successful, command with PID exists
+                        log(src, dst, "Failed to aquire lock " + lock_filename
+                            + " (old process still running): exiting" )
+                        sys.exit(3)
+                if ps_result != 1:
+                        # random ps error
+                        log(src, dst, "Error running ps to check existing process: %d" % ps_result)
+                        sys.exit(3)
+                # ps_result == 1, so there was no such process with PID
+                # steal the lock
+                log(src, dst, "Old process no longer exists, stealing lock")
+                lock = os.open(lock_filename,
+                               os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0644)
+        except Exception as inst:
+                log(src, dst, "Error aquiring lock: %s: %s" % (type(inst), str(inst)))
+                sys.exit(4)
 # store our own PID in the lock file
 try:
-	os.write(lock, "PID %d at %s"
+	os.write(lock, "PID %d at %s\n"
 		 % (os.getpid(), datetime.datetime.now().isoformat()))
 	os.close(lock)
 except Exception as inst:
@@ -376,28 +434,35 @@ except Exception as inst:
 	sys.exit(4)
 log(src, dst, "Finished lock aquire")
 
-# Delete old backups first if necessary
+# Find the symlink that points to the most recent successful backup.
+current_link_filename = os.path.join(dst, "current.%s" % os.path.basename(src))
+link_dest = None
+link_dest_arg = ''
+if print_diags:
+        print "current link filename: %s" % current_link_filename
 try:
-	if delete_first:
-		delete_old_backups(src, dst)
+        if os.path.exists(current_link_filename):
+                if not os.path.islink(current_link_filename):
+                        raise Exception("Current link is not a symlink: "
+                                        + current_link_filename)
+                link_dest = os.readlink(current_link_filename)
+                if print_diags:
+                        print "current link points to: %s" % link_dest
+                list_dest_arg = '--link-dest=' + link_dest
+except Exception as inst:
+	log(src, dst, "Error determining link_dest: %s: %s" % (type(inst), str(inst)))
+	sys.exit(4)
+if print_diags:
+        print "link_dest argument: " + link_dest_arg
+log(src, dst, "Finished determining link_dest")
+
+# Delete unnecessary old backups
+try:
+        delete_old_backups(src, dst, link_dest)
 except Exception as inst:
 	log(src, dst, "Error deleting old backups first: %s: %s" % (type(inst), str(inst)))
 	sys.exit(4)
 log(src, dst, "Finished deleting old backups first")
-
-# If we have any pre-existing backups, use the most recent as the
-# link-dest argument to rsync.
-try:
-	old_backups = get_old_backups(dst, os.path.basename(src))
-	if len(old_backups) > 0:
-		previous_time, previous_backup = old_backups[-1]
-		link_dest_arg = '--link-dest=' + os.path.join(dst, previous_backup)
-	else:
-		link_dest_arg = ''
-except Exception as inst:
-	log(src, dst, "Error determining link_dest: %s: %s" % (type(inst), str(inst)))
-	sys.exit(4)
-log(src, dst, "Finished determining link_dest")
 
 # Compute the name of new backup (of the form <src>.<isodate>)
 try:
@@ -455,10 +520,31 @@ except Exception as inst:
 	sys.exit(4)
 log(src, dst, "Finished running rsync")
 
+# Make the symlink to the just completed backup.
+try:
+        if not safe_mode:
+                new_link_filename = current_link_filename + ".new"
+                if print_diags:
+                        print "new_link_filename: " + new_link_filename
+                if os.path.exists(new_link_filename):
+                        print "new_link_filename already exists, unlinking it"
+                        os.unlink(new_link_filename)
+                if print_diags:
+                        print "symlinking %s -> %s" % (new_link_filename, backup_name)
+                os.symlink(backup_name, new_link_filename)
+                if print_diags:
+                        print "renaming %s -> %s" % (new_link_filename, current_link_filename)
+                os.rename(new_link_filename, current_link_filename)
+        else:
+                print "safe_mode: symlink %s -> %s" % (current_link_filename, backup_name)
+except Exception as inst:
+	log(src, dst, "Error making current symlink: %s: %s" % (type(inst), str(inst)))
+	sys.exit(4)
+log(src, dst, "Finished making current symlink")
+
 # Delete any unnecessary old backups
 try:
-	if not delete_first:
-		delete_old_backups(src, dst)
+        delete_old_backups(src, dst, backup_name)
 except Exception as inst:
 	log(src, dst, "Error deleting old backups last: %s: %s" % (type(inst), str(inst)))
 	sys.exit(4)
