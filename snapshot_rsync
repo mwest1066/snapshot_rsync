@@ -175,7 +175,7 @@ def process_cmdline():
 		if opt in ('-k', '--keep'):
 			match = re.compile('^(\d+),(\d+)$').search(opt_val)
 			if match == None:
-				print "Error processing argument -d " + opt_val
+				print "Error processing argument -k " + opt_val
 				print "Run 'snapshot_rsync -h' for help"
 				sys.exit(2)
 			days_past = int(match.group(1))
