@@ -71,7 +71,8 @@ Options:
   --keep <n>,<m>    days between now and n days ago. Multiple -k arguments
                     stack so that all constraints are satisfied. All backups
                     older than the largest <n> are deleted. Backups are only
-                    deleted if at least one -k argument is provided.
+                    deleted if at least one -k argument is provided. If n is
+                    0 then all old backups are deleted.
 
   -h, --help        Print this usage help.
 
@@ -281,8 +282,6 @@ def get_backups_to_delete(old_backups, current_name, delete_req):
         usable_old_backups = new_usable_old_backups
 
 	# greedy algorithm to find backup set that satisfies requirements
-	if len(usable_old_backups) < 2:
-		return backups_to_delete
 	prev_i = len(usable_old_backups) - 1
 	for i in range(len(usable_old_backups) - 2, 0, -1):
 		cur_time, cur_name = usable_old_backups[i]
@@ -307,6 +306,11 @@ def get_backups_to_delete(old_backups, current_name, delete_req):
 			backups_to_delete.append(cur_name)
 			continue
 		prev_i = i
+        
+        # don't ever delete current
+        backups_to_delete = [n for n in backups_to_delete
+                             if os.path.basename(n) != current_name]
+
 	return backups_to_delete
 
 ######################################################################
