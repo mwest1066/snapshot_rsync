@@ -73,12 +73,13 @@ Options:
   -d                Delete old backups before making the new backup. This
   --delete-first    ensures minimum space usage but can lead to inefficient
                     transfers and risks having fewer backups temporarily.
-		    The default is to delete after the new backup is done.
+                    The default is to delete after the new backup is done.
 
   -k <n>,<m>        Delete old backups, keeping at least one backup every m
   --keep <n>,<m>    days between now and n days ago. Multiple -k arguments
                     stack so that all constraints are satisfied. All backups
-		    older than the largest <n> are deleted.
+                    older than the largest <n> are deleted. Backups are only
+                    deleted if at least one -k argument is provided.
 
   -h, --help        Print this usage help.
 
@@ -244,6 +245,8 @@ def string_to_time(time_string):
 #
 # <delete_req> must be in the form of the global variable <delete_req>
 #
+# If <delete_req> is an empty list then no deletions are performed.
+#
 # Returns a list of strings which are the basenames of the backups
 # that should be deleted.
 #
@@ -252,6 +255,8 @@ def string_to_time(time_string):
 # oldest requirement date.
 
 def get_backups_to_delete(old_backups, delete_req):
+        if len(delete_req) == 0:
+                return []
 	# strip off backups that are too old
 	usable_old_backups = []
 	backups_to_delete = []
