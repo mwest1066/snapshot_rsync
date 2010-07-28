@@ -42,9 +42,6 @@ delete_req = []
 # Whether to print diagnostic information while running (True or False).
 print_diags = False
 
-# Whether to delete old backups before making the new one (True or False).
-delete_first = False
-
 # Name of the rsync binary to use (should be an absolute pathname).
 rsync_bin = '/usr/bin/rsync'
 
@@ -70,11 +67,6 @@ Usage: snapshot_rsync [options] <src> <dst>
   <dst>      the directory in which to make the backup.
 
 Options:
-  -d                Delete old backups before making the new backup. This
-  --delete-first    ensures minimum space usage but can lead to inefficient
-                    transfers and risks having fewer backups temporarily.
-                    The default is to delete after the new backup is done.
-
   -k <n>,<m>        Delete old backups, keeping at least one backup every m
   --keep <n>,<m>    days between now and n days ago. Multiple -k arguments
                     stack so that all constraints are satisfied. All backups
@@ -156,12 +148,11 @@ def process_cmdline():
 	global dst
 	global delete_req
 	global print_diags
-	global delete_first
 	global rsync_bin
 	global safe_mode
 	global ssh_machine
 	try:
-		options, args = getopt.gnu_getopt(sys.argv[1:], 'k:hdvVs:', ['help', 'version', 'keep=', 'verbose', 'delete-first', 'safe-mode', 'ssh='])
+		options, args = getopt.gnu_getopt(sys.argv[1:], 'k:hvVs:', ['help', 'version', 'keep=', 'verbose', 'safe-mode', 'ssh='])
 	except getopt.GetoptError, inst:
 		print "Error processing command line: " + str(inst)
 		print "Run 'snapshot_rsync -h' for help"
@@ -185,8 +176,6 @@ def process_cmdline():
 				datetime.timedelta(days = days_delta)))
 		if opt in ('-v', '--verbose'):
 			print_diags = True
-		if opt in ('-d', '--delete-first'):
-			delete_first = True
 		if opt == '--rsync':
 			rsync_bin = opt_val
 		if opt == '--safe-mode':
@@ -463,10 +452,9 @@ if print_diags:
         print "link_dest argument: " + link_dest_arg
 log(src, dst, "Finished determining link_dest")
 
-# Delete old backups first if necessary
+# Delete unnecessary old backups
 try:
-	if delete_first:
-		delete_old_backups(src, dst, link_dest)
+        delete_old_backups(src, dst, link_dest)
 except Exception as inst:
 	log(src, dst, "Error deleting old backups first: %s: %s" % (type(inst), str(inst)))
 	sys.exit(4)
@@ -548,8 +536,7 @@ log(src, dst, "Finished making current symlink")
 
 # Delete any unnecessary old backups
 try:
-	if not delete_first:
-		delete_old_backups(src, dst, backup_name)
+        delete_old_backups(src, dst, backup_name)
 except Exception as inst:
 	log(src, dst, "Error deleting old backups last: %s: %s" % (type(inst), str(inst)))
 	sys.exit(4)
