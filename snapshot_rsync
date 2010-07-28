@@ -21,7 +21,7 @@ isodate_format = '%04d-%02d-%02dT%02d:%02d:%02d%+03d:%02d'
 
 # Regular expression to match an ISO 8601 date. 8 fields are:
 #   year, month, day, hour, minute, second, timezone_hour, timezone_minute
-isodate_re = '^(\d\d\d\d)-(\d\d)-(\d\d)T(\d\d):(\d\d):(\d\d)([+-]\d\d):(\d\d)$'
+isodate_re = '(\d\d\d\d)-(\d\d)-(\d\d)T(\d\d):(\d\d):(\d\d)([+-]\d\d):(\d\d)$'
 
 ######################################################################
 # Global variables that can be over-ridden by command-line arguments.
@@ -240,6 +240,10 @@ def string_to_time(time_string):
 # backups in <old_backups> and the requirements <delete_req> to
 # be satisfied by the remaining set after deletion.
 #
+# The current backup will never be deleted, and all backups newer than
+# the current one will be deleted (it is assumed that they are failed
+# backups).
+#
 # <old_backups> must be in the form returned by get_old_backups() and
 # must include any backups that were just performed.
 #
@@ -254,21 +258,38 @@ def string_to_time(time_string):
 # most-recent-but-one backup, after stripping off backups past the
 # oldest requirement date.
 
-def get_backups_to_delete(old_backups, delete_req):
+def get_backups_to_delete(old_backups, current_name, delete_req):
+        # only do this if we have some keep requirements
         if len(delete_req) == 0:
                 return []
-	# strip off backups that are too old
-	usable_old_backups = []
+
+	usable_old_backups = old_backups
 	backups_to_delete = []
+
+        # strip off all backups newer than current
+        if current_name:
+                new_usable_old_backups = []
+                current_time = string_to_time(current_name)
+                for backup in usable_old_backups:
+                        cur_time, cur_name = backup
+                        if cur_time <= current_time:
+                                new_usable_old_backups.append(backup)
+                        else:
+                                backups_to_delete.append(cur_name)
+                usable_old_backups = new_usable_old_backups
+
+	# strip off backups that are too old
+        new_usable_old_backups = []
 	largest_past = max([datetime.timedelta(days = 0)] \
 			   + [past for past, delta in delete_req])
 	now_time = datetime.datetime.utcnow()
-	for backup in old_backups:
+	for backup in usable_old_backups:
 		cur_time, cur_name = backup
 		if now_time - cur_time < largest_past:
-			usable_old_backups.append(backup)
+			new_usable_old_backups.append(backup)
 		else:
 			backups_to_delete.append(cur_name)
+        usable_old_backups = new_usable_old_backups
 
 	# greedy algorithm to find backup set that satisfies requirements
 	if len(usable_old_backups) < 2:
@@ -313,9 +334,9 @@ def rm_tree(dir_name):
 ######################################################################
 # Delete old backups
 
-def delete_old_backups(src, dst):
+def delete_old_backups(src, dst, current_name):
 	old_backups = get_old_backups(dst, os.path.basename(src))
-	backups_to_delete = get_backups_to_delete(old_backups, delete_req)
+	backups_to_delete = get_backups_to_delete(old_backups, current_name, delete_req)
 	
 	try:
 		for dir in backups_to_delete:
@@ -445,7 +466,7 @@ log(src, dst, "Finished determining link_dest")
 # Delete old backups first if necessary
 try:
 	if delete_first:
-		delete_old_backups(src, dst)
+		delete_old_backups(src, dst, link_dest)
 except Exception as inst:
 	log(src, dst, "Error deleting old backups first: %s: %s" % (type(inst), str(inst)))
 	sys.exit(4)
@@ -528,7 +549,7 @@ log(src, dst, "Finished making current symlink")
 # Delete any unnecessary old backups
 try:
 	if not delete_first:
-		delete_old_backups(src, dst)
+		delete_old_backups(src, dst, backup_name)
 except Exception as inst:
 	log(src, dst, "Error deleting old backups last: %s: %s" % (type(inst), str(inst)))
 	sys.exit(4)
