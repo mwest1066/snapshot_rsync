@@ -402,10 +402,14 @@ log(src, dst, "Finished determining link_dest")
 # Compute the name of new backup (of the form <src>.<isodate>)
 try:
 	curtime = time.localtime()
+        if time.daylight != 0:
+                tz = time.altzone
+        else:
+                tz = time.timezone
 	backup_name = os.path.basename(src) + '.' + isodate_format % ( \
 		curtime.tm_year, curtime.tm_mon, curtime.tm_mday, \
 		curtime.tm_hour, curtime.tm_min, curtime.tm_sec, \
-		(-time.timezone) / 3600, ((-time.timezone) / 60) % 60)
+		(-tz) / 3600, ((-tz) / 60) % 60)
 except Exception as inst:
 	log(src, dst, "Error determining backup_name: %s: %s" % (type(inst), str(inst)))
 	sys.exit(4)
