@@ -448,7 +448,7 @@ try:
                 link_dest = os.readlink(current_link_filename)
                 if print_diags:
                         print "current link points to: %s" % link_dest
-                list_dest_arg = '--link-dest=' + link_dest
+                link_dest_arg = '--link-dest=' + link_dest
 except Exception as inst:
 	log(src, dst, "Error determining link_dest: %s: %s" % (type(inst), str(inst)))
 	sys.exit(4)
