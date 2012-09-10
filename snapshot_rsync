@@ -337,8 +337,8 @@ def delete_old_backups(src, dst, current_name):
 			if print_diags:
 				print "Deleting old backup " + rm_name
 			if not safe_mode:
-				rm_tree(rm_name)
 				log(src, dst, "Deleting old backup " + rm_name)
+				rm_tree(rm_name)
 			else:
 				print "safe_mode: rm_tree: " + rm_name
 	except Exception, inst:
